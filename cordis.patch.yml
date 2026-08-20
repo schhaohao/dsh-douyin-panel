@@ -1,0 +1,6 @@
+# Douyin panel bundle layer: inserts the plugin row by package name. The row
+# resolves through the profile's node_modules (a `dsh plugin add` link or a
+# hand-made symlink), and the client half ships via exports["./client"].
+- insert:
+    - id: douyin-panel
+      name: dsh-douyin-panel

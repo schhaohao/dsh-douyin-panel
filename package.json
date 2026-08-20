@@ -1,0 +1,30 @@
+{
+  "name": "dsh-douyin-panel",
+  "version": "0.1.0",
+  "description": "DSH Web GUI plugin: docks a resizable Douyin feed on the right side of the app. The host half runs a loopback Douyin mirror (X-Frame-Options/CSP stripped), the client half renders it in a shell.overlay panel.",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "lib/client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-layout"]
+    }
+  },
+  "private": true,
+  "scripts": {
+    "bundle": "tsdown",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT"
+}
