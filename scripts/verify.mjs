@@ -110,7 +110,9 @@ try {
   const hiddenDock = await dockWidth()
   const iframeStillThere = await page.locator('[data-douyin-panel] iframe').count()
   console.log('extreme narrow 400: dock:', hiddenDock, 'iframe:', iframeStillThere)
-  check('400: fit < min → dock hid', hiddenDock === 0)
+  // 新编排：隐藏 = dock 盒子整个画出视口右缘（位移量 100%）而不是宽 0
+  const hiddenX = await page.evaluate(() => document.querySelector('[data-douyin-panel] .douyin-dock')?.getBoundingClientRect().x ?? -1)
+  check('400: fit < min → dock FULLY translated out of view', hiddenX >= 400, hiddenX)
   check('400: iframe subtree survived (never unmount)', iframeStillThere === 1)
   await page.setViewportSize({ width: 1600, height: 1000 })
   await page.waitForTimeout(900)

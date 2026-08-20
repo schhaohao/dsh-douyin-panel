@@ -95,8 +95,10 @@ const CSS = `
   right: 0;
   height: 100%;
   overflow: hidden;
-  /* Rides the frame's own track curve so dock + grid squeeze in lockstep. */
-  transition: width var(--ds-transition-duration-slow, 240ms) var(--ds-ease-in-out, ease);
+  /* 开合动画 = transform 位移（GPU 合成），与 frame 轨道同一支曲线同一支时长 ——
+     两个平面同步到亚像素，且 iframe 永不再排（视频区不 jitter）。 */
+  transition: transform var(--ds-transition-duration-slow, 240ms) var(--ds-ease-in-out, ease);
+  will-change: transform;
 }
 [data-douyin-panel] .douyin-dock[data-dragging='true'] { transition: none; }
 [data-douyin-panel] .douyin-root {
@@ -431,6 +433,8 @@ function useSidebarHandshake(layout: DockProps['layout'], dockRef: React.RefObje
 /** The additive overlay occupant: dock-or-tab. */
 function DouyinPanel({ layout }: DockProps) {
   const [open, setOpen] = useState<boolean>(() => readPersisted(OPEN_KEY, false))
+  /** The dock OUT while its slide-out animation lands — 视觉 still ON stage. */
+  const [closing, setClosing] = useState(false)
   const [customWidth, setCustomWidth] = useState<number | undefined>(() => {
     const persisted = readPersisted(WIDTH_KEY, 0)
     return persisted > 0 ? persisted : undefined
@@ -442,6 +446,7 @@ function DouyinPanel({ layout }: DockProps) {
   const [nonce, setNonce] = useState(0)
   const [dragging, setDragging] = useState(false)
   const dockRef = useRef<HTMLDivElement | null>(null)
+  const dockInnerRef = useRef<HTMLDivElement | null>(null)
   const gripRef = useRef<HTMLDivElement | null>(null)
   const dragBase = useRef(0)
 
@@ -492,11 +497,19 @@ function DouyinPanel({ layout }: DockProps) {
   }, [open, meta, customWidth])
 
   const toggle = (): void => {
-    setOpen((prev) => {
-      writePersisted(OPEN_KEY, !prev)
-      return !prev
-    })
+    if (open) {
+      // 关 = 两平面同台同曲线演出：deputy 立即奉还轨道 → dock 跟着滑动退出 →
+      // 动画落幕后才允许卸 dock + 弹回标签。
+      setOpen(false)
+      setClosing(true)
+    } else {
+      setOpen(true)
+    }
+    writePersisted(OPEN_KEY, !open)
   }
+
+  /** Unstage the dock once its slide-out transition lands. */
+  const onClosingEnd = (): void => { setClosing(false) }
 
   const refresh = (): void => {
     setLoaded(false)
@@ -549,6 +562,8 @@ function DouyinPanel({ layout }: DockProps) {
     dragBase.current = wantWidth + event.clientX
     gripRef.current?.setPointerCapture(event.pointerId)
     gripRef.current?.setAttribute('data-dragging', 'true')
+    // 手势期间掐掉 frame 自己的轨道过渡 —— 我的逐像素写 + 它的动画 = 追逐卡感。
+    frameOf(dockRef.current)?.setAttribute('data-dragging', 'true')
     setDragging(true)
   }
   const onGripMove = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -558,6 +573,7 @@ function DouyinPanel({ layout }: DockProps) {
   const endGrip = (event: React.PointerEvent<HTMLDivElement>): void => {
     gripRef.current?.releasePointerCapture(event.pointerId)
     gripRef.current?.setAttribute('data-dragging', 'false')
+    frameOf(dockRef.current)?.removeAttribute('data-dragging')
     setDragging(false)
     if (customWidth !== undefined) writePersisted(WIDTH_KEY, customWidth)
   }
@@ -570,7 +586,9 @@ function DouyinPanel({ layout }: DockProps) {
     writePersisted(WIDTH_KEY, 0)
   }
 
-  if (!open) {
+  // 渲染形态：closed 完全无 dock；closing 期间 dock 继续挂载（视觉 sliding-out）。
+  const showDock = open || closing
+  if (!showDock) {
     return (
       <div data-douyin-panel ref={dockRef}>
         <button type="button" className="douyin-tab" title="打开抖音面板" onClick={toggle}>
@@ -586,9 +604,19 @@ function DouyinPanel({ layout }: DockProps) {
 
   return (
     <div data-douyin-panel ref={dockRef}>
-      {/* Width-0 keeps the subtree mounted while the chain concedes the seam,
-          mirroring the details column's never-unmount contract. */}
-      <div className="douyin-dock" style={{ width: rendered }} data-dragging={dragging || undefined}>
+      {/* 恒等式：dock 平移量 = wantWidth − rendered(track 实际宽度)。
+          轨道与 dock 用同一支缓动曲线 —— 两平面同步到亚像素；
+          视觉态来自 open/closing，开场即 translateX(wantWidth) → 0。 */}
+      <div
+        ref={dockInnerRef}
+        className="douyin-dock"
+        style={{
+          width: wantWidth,
+          transform: `translateX(${String(open ? Math.max(0, wantWidth - rendered) : wantWidth)}px)`,
+        }}
+        data-dragging={dragging || undefined}
+        onTransitionEnd={closing ? onClosingEnd : undefined}
+      >
         <div className="douyin-root" style={{ width: wantWidth }}>
           <div className="douyin-header">
             <div className="douyin-title"><span className="douyin-dot" />抖音 · vibe time</div>

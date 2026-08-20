@@ -241,16 +241,31 @@ export const SHIM = `<script>(function () {
       if (window.parent === window) return
       var de = document.documentElement
       if (!de) return
+      // scrollWidth forces a SYNCHRONOUS LAYOUT FLUSH — never run it on a
+      // timer on a page full of <video>; only when the DOM actually changed,
+      // inside an idle slice. Busy skipping: ONE pending callback at a time.
       var cw = de.clientWidth
       var sw = Math.max(de.scrollWidth, document.body ? document.body.scrollWidth : 0)
-      // Report every tick — the consumer is idempotent; a dedup key here once
-      // ate the only report when the parent listener attached late.
       window.parent.postMessage({ __douyinPanel: true, kind: 'content-fit', clientWidth: cw, scrollWidth: sw, overflowPx: Math.max(0, sw - cw) }, '*')
     } catch (e) {}
   }
-  setInterval(reportFit, 700)
+  var fitPending = false
+  function scheduleFit() {
+    if (fitPending) return
+    fitPending = true
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(function () { fitPending = false; reportFit() }, { timeout: 900 })
+    } else {
+      setTimeout(function () { fitPending = false; reportFit() }, 250)
+    }
+  }
+  // THE CHEAP OBSERVER PATTERN: mutation-driven + resize + load —no periodic reflush.
+  try {
+    new MutationObserver(scheduleFit).observe(document.documentElement, { childList: true, subtree: true, attributes: true })
+  } catch (e) {}
+  window.addEventListener('DOMContentLoaded', reportFit)
   window.addEventListener('load', reportFit)
-  window.addEventListener('resize', reportFit)
+  window.addEventListener('resize', scheduleFit)
   reportFit()
 })()</script>`
 
