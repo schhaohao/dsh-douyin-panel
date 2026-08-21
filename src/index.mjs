@@ -24,6 +24,7 @@ import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib'
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { harvestChromeDouyinCookies } from './cookies-harvest.mjs'
 
 export const name = 'dsh-douyin-panel'
 export const inject = ['webServer']
@@ -111,6 +112,30 @@ export function clearImportedCookies() {
 /** The imported-cookie map — lazy-loaded on first request. */
 function imported() {
   return importedCookies ?? loadImportedCookies()
+}
+
+/**
+ * Auto-harvested session: pulled out of the user's REAL browser profile on a
+ * timer — always-fresher than any pasted copy (session cookies rotate).
+ * @type {Record<string, string>}
+ */
+let harvestedCookies = {}
+/** @type {string} */
+let harvestSource = ''
+
+/**
+ * Feed one successful harvest into the picture.
+ * @param {Record<string, string>} cookies - name→value.
+ * @param {string} source - e.g. "chrome:2026-08-20T…".
+ */
+export function setHarvest(cookies, source) {
+  harvestedCookies = cookies
+  harvestSource = source
+}
+
+/** The auto-harvest picture, with provenance. */
+export function harvest() {
+  return { cookies: harvestedCookies, source: harvestSource }
 }
 
 /** Transport-level headers that must not be forwarded in either direction. */
@@ -442,6 +467,7 @@ export function mergeCookies(jarHeader) {
     }
   }
   Object.assign(merged, imported())
+  Object.assign(merged, harvestedCookies) // auto-harvest wins: always the freshest
   if (Object.keys(merged).length === 0) return undefined
   return Object.entries(merged).map(([k, v]) => `${k}=${v}`).join('; ')
 }
@@ -621,10 +647,12 @@ export function apply(ctx) {
           'content-type': 'application/json; charset=utf-8',
           'cache-control': 'no-store',
         })
+        const picture = harvest()
         res.end(JSON.stringify({
           url: `${origin}/`,
           upstream: `${UPSTREAM_ORIGIN}/`,
           cookieImported: Object.keys(imported()).length > 0,
+          harvest: Object.keys(picture.cookies).length > 0 ? { count: Object.keys(picture.cookies).length, source: picture.source } : undefined,
         }))
       },
     }),
@@ -674,4 +702,27 @@ export function apply(ctx) {
     }),
     'douyin-panel: cookie route',
   )
+
+  // Chrome-profile auto-harvest: pull the douyin session out of the user's
+  // REAL browser profile every 15 minutes — pasted snacks keep being honored,
+  // harvested ones always override Fresher-than-any-paste.
+  ctx.effect(() => {
+    const run = async () => {
+      try {
+        const result = await harvestChromeDouyinCookies()
+        if (result === undefined) {
+          ctx.logger.info('douyin-panel: session harvest — browser cookies low or blocked (user has never logged douyin there)')
+          return
+        }
+        const same = JSON.stringify(result.cookies) === JSON.stringify(harvest().cookies)
+        setHarvest(result.cookies, result.source)
+        if (!same) ctx.logger.info(`douyin-panel: session harvest refreshed — ${String(result.count)} douyin cookies from ${result.source}`)
+      } catch (error) {
+        ctx.logger.warn('douyin-panel: session harvest failed', error)
+      }
+    }
+    void run()
+    const timer = setInterval(() => { void run() }, 15 * 60 * 1000)
+    return () => { clearInterval(timer) }
+  }, 'douyin-panel: session harvest')
 }
